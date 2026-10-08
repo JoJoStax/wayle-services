@@ -1,4 +1,4 @@
-use zbus::proxy;
+use zbus::{proxy, zvariant::OwnedObjectPath};
 
 #[proxy(
     interface = "org.freedesktop.UPower",
@@ -6,5 +6,6 @@ use zbus::proxy;
     default_path = "/org/freedesktop/UPower"
 )]
 pub(crate) trait UPower {
-    async fn enumerate_devices(&self) -> zbus::Result<Vec<zbus::zvariant::OwnedObjectPath>>;
+    async fn enumerate_devices(&self) -> zbus::Result<Vec<OwnedObjectPath>>;
+    async fn get_display_device(&self) -> zbus::Result<OwnedObjectPath>;
 }

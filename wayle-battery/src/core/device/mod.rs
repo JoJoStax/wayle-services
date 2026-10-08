@@ -212,8 +212,14 @@ impl Device {
     /// # Errors
     /// Returns error if setting charge threshold fails.
     pub async fn enable_charge_threshold(&self, enabled: bool) -> Result<(), Error> {
-        DeviceController::enable_charge_threshold(&self.zbus_connection, &self.device_path, enabled)
-            .await
+        DeviceController::enable_charge_threshold(
+            &self.zbus_connection,
+            &self.device_path,
+            enabled,
+        )
+        .await?;
+        self.charge_threshold_enabled.set(enabled);
+        Ok(())
     }
 
     #[allow(clippy::too_many_lines)]
@@ -351,11 +357,22 @@ impl Device {
         device_path: OwnedObjectPath,
         cancellation_token: Option<CancellationToken>,
     ) -> Self {
+        let native_path = props.native_path;
+        let mut charge_threshold_supported = props.charge_threshold_supported;
+        let mut charge_threshold_enabled = props.charge_threshold_enabled;
+
+        if let Some(sysfs_path) = controls::charge_types_path(&native_path) {
+            charge_threshold_supported = true;
+            if let Some(sysfs_enabled) = controls::read_charge_types_enabled(&sysfs_path) {
+                charge_threshold_enabled = sysfs_enabled;
+            }
+        }
+
         Self {
             zbus_connection: connection.clone(),
             device_path,
             cancellation_token,
-            native_path: Property::new(props.native_path),
+            native_path: Property::new(native_path),
             vendor: Property::new(props.vendor),
             model: Property::new(props.model),
             serial: Property::new(props.serial),
@@ -387,8 +404,8 @@ impl Device {
             icon_name: Property::new(props.icon_name),
             charge_start_threshold: Property::new(props.charge_start_threshold),
             charge_end_threshold: Property::new(props.charge_end_threshold),
-            charge_threshold_enabled: Property::new(props.charge_threshold_enabled),
-            charge_threshold_supported: Property::new(props.charge_threshold_supported),
+            charge_threshold_enabled: Property::new(charge_threshold_enabled),
+            charge_threshold_supported: Property::new(charge_threshold_supported),
             charge_threshold_settings_supported: Property::new(
                 props.charge_threshold_settings_supported,
             ),

@@ -31,11 +31,37 @@ impl BatteryServiceBuilder {
         self
     }
 
+    async fn find_battery_device(connection: &Connection) -> Option<OwnedObjectPath> {
+        let upower = crate::proxy::upower::UPowerProxy::builder(connection)
+            .build()
+            .await
+            .ok()?;
+        let devices = upower.enumerate_devices().await.ok()?;
+
+        for path in devices {
+            let Ok(builder) = crate::proxy::device::DeviceProxy::builder(connection).path(&path)
+            else {
+                continue;
+            };
+            let Ok(proxy) = builder.build().await else {
+                continue;
+            };
+
+            let is_battery = proxy.device_type().await.map(|t| t == 2).unwrap_or(false);
+            let is_power_supply = proxy.power_supply().await.unwrap_or(false);
+            let is_present = proxy.is_present().await.unwrap_or(false);
+
+            if is_battery && is_power_supply && is_present {
+                return Some(path);
+            }
+        }
+        None
+    }
+
     /// Builds the BatteryService.
     ///
-    /// Uses the DisplayDevice if no specific device path was set.
-    /// The DisplayDevice is UPower's composite device that represents the overall
-    /// battery status, automatically handling multiple batteries if present.
+    /// Auto-detects the primary battery device from UPower. If none is found,
+    /// falls back to the DisplayDevice which aggregates power status.
     ///
     /// # Errors
     ///
@@ -43,15 +69,16 @@ impl BatteryServiceBuilder {
     /// `Error::Dbus` if D-Bus connection fails.
     #[instrument(skip_all)]
     pub async fn build(self) -> Result<BatteryService, Error> {
+        let connection = Connection::system().await?;
+        let cancellation_token = CancellationToken::new();
+
         let device_path = if let Some(path) = self.device_path {
+            path
+        } else if let Some(path) = Self::find_battery_device(&connection).await {
             path
         } else {
             OwnedObjectPath::try_from("/org/freedesktop/UPower/devices/DisplayDevice")?
         };
-
-        let connection = Connection::system().await?;
-
-        let cancellation_token = CancellationToken::new();
 
         let device = Device::get_live(LiveDeviceParams {
             connection: &connection,

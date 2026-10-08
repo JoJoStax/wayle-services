@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use tracing::instrument;
 use zbus::{Connection, zvariant::OwnedObjectPath};
@@ -8,11 +8,46 @@ use crate::{error::Error, proxy::device::DeviceProxy};
 pub(super) struct DeviceController;
 
 /// Returns the `charge_types` sysfs path for a device given its UPower
-/// `NativePath` (e.g. `/sys/devices/.../power_supply/BAT0`), or `None` if the
+/// `NativePath` (e.g. `BAT0` or `/sys/devices/.../power_supply/BAT0`), or `None` if the
 /// file does not exist (meaning the kernel uses numeric thresholds instead).
-fn charge_types_path(native_path: &str) -> Option<std::path::PathBuf> {
-    let path = Path::new(native_path).join("charge_types");
-    path.exists().then_some(path)
+pub(crate) fn charge_types_path(native_path: &str) -> Option<PathBuf> {
+    if !native_path.is_empty() {
+        let base = Path::new(native_path);
+        let path = if base.is_absolute() {
+            base.join("charge_types")
+        } else {
+            Path::new("/sys/class/power_supply").join(base).join("charge_types")
+        };
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    // Fallback: look for any power_supply device that exposes `charge_types`
+    if let Ok(entries) = std::fs::read_dir("/sys/class/power_supply") {
+        for entry in entries.flatten() {
+            let candidate = entry.path().join("charge_types");
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
+}
+
+/// Reads the currently active mode from a `charge_types` file (e.g. `Fast Standard [Long_Life]`).
+/// Returns `Some(true)` if `[Long_Life]` is active, `Some(false)` if `[Standard]` is active,
+/// or `None` if unrecognized.
+pub(crate) fn read_charge_types_enabled(path: &Path) -> Option<bool> {
+    let content = std::fs::read_to_string(path).ok()?;
+    if content.contains("[Long_Life]") {
+        Some(true)
+    } else if content.contains("[Standard]") {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 impl DeviceController {
@@ -94,8 +129,8 @@ impl DeviceController {
         }
 
         // Obtain the kernel sysfs path for this device from UPower's
-        // NativePath property (e.g. /sys/devices/.../power_supply/BAT0).
-        let native_path = proxy.native_path().await?;
+        // NativePath property (e.g. BAT0 or /sys/devices/.../power_supply/BAT0).
+        let native_path = proxy.native_path().await.unwrap_or_default();
 
         if let Some(path) = charge_types_path(&native_path) {
             let mode = if enabled { "Long_Life" } else { "Standard" };
